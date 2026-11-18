@@ -1,3 +1,4 @@
+
 name: KALVO 7.2.2 Android APK (raw APK artifact)
 
 on:
@@ -21,17 +22,16 @@ jobs:
       - name: Check out source repository
         uses: actions/checkout@v4
 
-      - name: Extract the exact 7.2.2 source archive
+      - name: Extract source archive
         shell: bash
         run: |
           set -euo pipefail
           if [[ -f main.py && -d apex ]]; then
             echo "Project sources already at repository root"
           else
-            ZIP="KALVO_7.2.2_BOOT_DIAGNOSTICS.zip"
+            ZIP="KALVO_7.2.2_BOOT_DIAGNOSTICS_DIRECT_APK.zip"
             if [[ ! -f "$ZIP" ]]; then
-              echo "ERROR: $ZIP is missing from the repository root."
-              echo "Upload the 7.2.2 source ZIP to the root; do not leave only the old 7.2.0 ZIP."
+              echo "ERROR: $ZIP is missing"
               ls -la
               exit 1
             fi
@@ -52,9 +52,8 @@ jobs:
           test -f buildozer.spec
           test -f VERSION.txt
           test "$(tr -d '\r\n ' < VERSION.txt)" = "7.2.2"
-          echo "Validated source archive version: $(cat VERSION.txt)"
 
-      - name: Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -64,16 +63,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest
 
-      - name: Run pytest suite
+      - name: Run pytest
         run: python -m pytest -q
 
-      - name: Run unittest compatibility suite
+      - name: Run unittest
         run: python -m unittest discover -s tests -q
 
       - name: Compile Python sources
         run: python -m compileall -q main.py apex services tests tools
 
-      - name: Validate Android package configuration
+      - name: Validate Android configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -84,7 +83,8 @@ jobs:
 
           spec = configparser.ConfigParser(interpolation=None)
           if not spec.read('buildozer.spec', encoding='utf-8'):
-              raise SystemExit('buildozer.spec is missing or unreadable')
+              raise SystemExit('buildozer.spec missing')
+
           expected = {
               ('app', 'version'): '7.2.2',
               ('app', 'package.name'): 'kalvomax',
@@ -94,6 +94,7 @@ jobs:
               ('app', 'android.minapi'): '24',
               ('app', 'icon.filename'): '%(source.dir)s/assets/kalvo_icon.png',
           }
+
           for (section, key), wanted in expected.items():
               actual = spec.get(section, key, raw=True).strip()
               if actual != wanted:
@@ -102,25 +103,31 @@ jobs:
           icon = Path('assets/kalvo_icon.png')
           data = icon.read_bytes()
           if data[:8] != b'\x89PNG\r\n\x1a\n':
-              raise SystemExit('Invalid PNG launcher icon')
+              raise SystemExit('Invalid PNG icon')
           if struct.unpack('>II', data[16:24]) != (512, 512):
-              raise SystemExit('Launcher icon must be 512x512')
+              raise SystemExit('Icon must be 512x512')
 
-          for p in ('services/kalvo_monitor.py', 'assets/sfx/tap.wav',
-                    'assets/sfx/success.wav', 'assets/sfx/alert.wav',
-                    'ANDROID_STARTUP_DIAGNOSTICS_FA.md'):
+          for p in (
+              'services/kalvo_monitor.py',
+              'assets/sfx/tap.wav',
+              'assets/sfx/success.wav',
+              'assets/sfx/alert.wav',
+              'ANDROID_STARTUP_DIAGNOSTICS_FA.md'
+          ):
               if not Path(p).exists():
-                  raise SystemExit(f'Missing required source: {p}')
+                  raise SystemExit(f'Missing: {p}')
 
           service = Path('services/kalvo_monitor.py').read_text(encoding='utf-8')
-          if 'monitor_loop' not in service or not any(x in service for x in ('paper_only', 'paper-only')):
-              raise SystemExit('Background service entry point failed validation')
+          if 'monitor_loop' not in service or not any(
+              x in service for x in ('paper_only', 'paper-only')
+          ):
+              raise SystemExit('Background service validation failed')
 
-          print('KALVO 7.2.2 source validation passed.')
+          print('KALVO 7.2.2 validation passed')
           PY
 
   build:
-    name: Build APK and publish direct APK release asset
+    name: Build Android APK
     needs: validate
     runs-on: ubuntu-22.04
     timeout-minutes: 180
@@ -130,17 +137,18 @@ jobs:
       APP_ANDROID_ACCEPT_SDK_LICENSE: '1'
       PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: '0'
       P4A_RELEASE: '0'
+
     steps:
-      - name: Check out source repository
+      - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Extract the exact 7.2.2 source archive
+      - name: Extract source archive
         shell: bash
         run: |
           set -euo pipefail
           if [[ ! -f main.py || ! -d apex ]]; then
-            ZIP="KALVO_7.2.2_BOOT_DIAGNOSTICS.zip"
-            test -f "$ZIP" || { echo "Missing $ZIP"; exit 1; }
+            ZIP="KALVO_7.2.2_BOOT_DIAGNOSTICS_DIRECT_APK.zip"
+            test -f "$ZIP"
             mkdir -p _kalvo_extract
             unzip -q -o "$ZIP" -d _kalvo_extract
             rm -rf _kalvo_extract/.github
@@ -153,6 +161,7 @@ jobs:
             fi
             rm -rf _kalvo_extract
           fi
+
           test "$(tr -d '\r\n ' < VERSION.txt)" = "7.2.2"
           test "$(grep -E '^version[[:space:]]*=' buildozer.spec | head -1 | tr -d '[:space:]')" = "version=7.2.2"
 
@@ -167,10 +176,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Android build system packages
-        shell: bash
+      - name: Install Android build packages
         run: |
-          set -euo pipefail
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             ant autoconf automake autopoint build-essential ccache cmake gettext \
@@ -179,7 +186,7 @@ jobs:
             libtinfo5 libtool make openjdk-17-jdk patch pkg-config unzip wget zip \
             zlib1g-dev
 
-      - name: Restore Android toolchain cache
+      - name: Restore Android cache
         uses: actions/cache@v4
         with:
           path: |
@@ -190,27 +197,27 @@ jobs:
             ${{ runner.os }}-kalvo-7.2.2-
             ${{ runner.os }}-kalvo-
 
-      - name: Install pinned Android build toolchain
+      - name: Install Buildozer
         run: |
-          set -euo pipefail
           python -m pip install --upgrade pip setuptools wheel virtualenv
           python -m pip install 'buildozer==1.5.0' 'Cython==0.29.36' legacy-cgi
           buildozer --version
           cython --version
 
-      - name: Build KALVO 7.2.2 debug APK
+      - name: Build APK
         run: buildozer -v android debug
 
-      - name: Verify APK and produce metadata
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t APKS < <(find bin -maxdepth 1 -type f -name '*.apk' -print | sort)
           if [[ ${#APKS[@]} -ne 1 ]]; then
-            echo "Expected exactly one APK, found ${#APKS[@]}"
+            echo "Expected exactly one APK"
             find bin -maxdepth 1 -type f -print || true
             exit 1
           fi
+
           mkdir -p build-metadata
           sha256sum "${APKS[0]}" | tee build-metadata/SHA256SUMS.txt
           cp buildozer.spec build-metadata/buildozer.spec
@@ -222,7 +229,7 @@ jobs:
             'Trading: local paper/simulation ledger only' \
             > build-metadata/BUILD_INFO.txt
 
-      - name: Keep Actions artifact backup
+      - name: Upload APK backup
         uses: actions/upload-artifact@v4
         with:
           name: KALVO-7.2.2-Android-APK-backup
@@ -230,7 +237,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload the APK directly (without a ZIP wrapper)
+      - name: Upload direct APK
         uses: actions/upload-artifact@v7
         with:
           path: bin/*.apk
